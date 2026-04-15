@@ -1,0 +1,1 @@
+Coloca aquí imágenes, íconos u otros recursos locales si más adelante quieres sacar dependencias del HTML base.

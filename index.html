@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Car Projection Control</title>
+  <meta name="description" content="Control y proyección de dibujo sobre vehículo con PeerJS, canvas y modo tablet/proyección." />
+  <meta name="theme-color" content="#06070b" />
+    <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body>
+  <!-- App principal -->
+  <div id="app">
+    <div class="stage-wrap">
+      <canvas id="baseCanvas"></canvas>
+      <canvas id="drawCanvas"></canvas>
+      <canvas id="fxCanvas"></canvas>
+      <div id="crosshair" class="crosshair"></div>
+    </div>
+
+        <!-- HUD -->
+    <div class="hud" id="hud">
+      <div class="pill"><span class="mode-label" id="modeLabel">CONTROL MODE</span><span id="roomReadout">Sala: —</span></div>
+      <div class="pill"><span class="dot disconnected" id="statusDot"></span><span id="statusText">Sin conexión</span></div>
+    </div>
+
+        <!-- Paneles de control -->
+    <div class="shell" id="controlShell">
+      
+      <aside class="toolbar hidden" id="toolbar">
+        <div class="toolbar-header">
+          <div class="brand">
+            <h1>Car Projection Studio</h1>
+            <p>Tablet como control • proyector como lienzo</p>
+          </div>
+          <button id="toggleToolbarBtn" title="Ocultar panel">✦</button>
+        </div>
+
+        <div class="toolbar-body">
+          <section class="group">
+            <div class="group-title"><span>Sesión</span><span id="peerRoleLabel">Control</span></div>
+            <label>
+              Room ID
+              <input type="text" id="roomInput" placeholder="ej. demo-car-01" />
+            </label>
+            <div class="row">
+              <button id="connectBtn">Conectar</button>
+              <button id="copyControlLinkBtn">Copiar link tablet</button>
+            </div>
+            <div class="row">
+              <button id="copyProjectionLinkBtn">Copiar link proyección</button>
+              <button id="fullscreenBtn">Pantalla completa</button>
+            </div>
+            <div class="hint">Abre este archivo en ambos dispositivos. En la tablet usa <strong>?mode=control</strong> y en el computador <strong>?mode=projection</strong>.</div>
+          </section>
+
+          <section class="group">
+            <div class="group-title"><span>Capas</span><span>Base + dibujo + FX</span></div>
+            <div class="row">
+              <button id="loadImageBtn">Cargar carro</button>
+              <button id="fitImageBtn">Ajustar imagen</button>
+            </div>
+            <input type="file" id="imageInput" accept="image/*" class="hidden-in-projection file-input-hidden" />
+            <div class="row">
+              <button id="clearBtn" class="danger">Limpiar dibujo</button>
+              <button id="toggleImageBtn">Ocultar imagen</button>
+            </div>
+            <div class="row">
+              <button id="undoBtn">Deshacer</button>
+              <button id="redoBtn">Rehacer</button>
+            </div>
+          </section>
+
+          <section class="group">
+            <div class="group-title"><span>Show</span><span>Salida limpia</span></div>
+            <div class="row">
+              <button id="toggleHudBtn">Ocultar HUD</button>
+              <button id="blackBgBtn">Fondo negro</button>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+
+      <div class="pen-dock-root" id="penDockRoot" data-side="right">
+        
+        <div class="pen-dock" id="penDock">
+          <button class="dock-handle" id="dockHandle" title="Arrastra para mover el menú">⋮⋮</button>
+
+          <button class="dock-main" id="penMenuToggle" title="Abrir biblioteca de pinceles" aria-label="Abrir biblioteca de pinceles">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="5" y1="6" x2="19" y2="6"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <line x1="5" y1="18" x2="19" y2="18"></line>
+              <circle cx="9" cy="6" r="2"></circle>
+              <circle cx="15" cy="12" r="2"></circle>
+              <circle cx="11" cy="18" r="2"></circle>
+            </svg>
+          </button>
+
+          <button class="dock-main quick-tool-btn tool-btn active" data-tool="brush" data-label="Bolígrafo rápido" data-size="12" data-alpha="1" data-glow="0.12" title="Bolígrafo rápido" aria-label="Bolígrafo rápido">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 20l5.2-1.1L18 10.1a2.6 2.6 0 0 0-3.7-3.7L5.5 15.2 4 20Z"></path>
+              <path d="M13 7l4 4"></path>
+            </svg>
+          </button>
+
+          <button class="dock-main quick-tool-btn tool-btn" data-tool="eraser" data-label="Borrador rápido" data-size="24" data-alpha="1" data-glow="0" title="Borrador rápido" aria-label="Borrador rápido">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12.2 4.4 20 12.2a2.1 2.1 0 0 1 0 3l-3.4 3.4a2.1 2.1 0 0 1-1.5.6H8.6a2.2 2.2 0 0 1-1.5-.6l-3.2-3.2a2.1 2.1 0 0 1 0-3l5.3-5.3"></path>
+              <path d="M8.5 7.5 16.5 15.5"></path>
+              <path d="M9 19.2h10.8"></path>
+            </svg>
+          </button>
+
+          <button class="dock-main" id="quickPaletteBtn" title="Abrir paleta de colores" aria-label="Abrir paleta de colores">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3a9 9 0 1 0 0 18h1.4a2.6 2.6 0 0 0 0-5.2h-.5a1.7 1.7 0 0 1 0-3.4H15A4 4 0 0 0 15 4h-3Z"></path>
+              <circle cx="7.5" cy="11" r="1"></circle>
+              <circle cx="10" cy="7.5" r="1"></circle>
+              <circle cx="15.5" cy="8.5" r="1"></circle>
+            </svg>
+          </button>
+
+          <button class="dock-main" id="quickUndoBtn" title="Deshacer" aria-label="Deshacer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M10 8 5 12l5 4"></path>
+              <path d="M6 12h8.5a5.5 5.5 0 0 1 0 11H11"></path>
+            </svg>
+          </button>
+
+          <button class="dock-main" id="quickRedoBtn" title="Rehacer" aria-label="Rehacer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m14 8 5 4-5 4"></path>
+              <path d="M18 12H9.5a5.5 5.5 0 0 0 0 11H13"></path>
+            </svg>
+          </button>
+
+          <button class="dock-main" id="quickClearBtn" title="Limpiar lienzo" aria-label="Limpiar lienzo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 6h18"></path>
+              <path d="M8 6V4.8A1.8 1.8 0 0 1 9.8 3h4.4A1.8 1.8 0 0 1 16 4.8V6"></path>
+              <path d="M6.2 6 7 19.2A1.8 1.8 0 0 0 8.8 21h6.4A1.8 1.8 0 0 0 17 19.2L17.8 6"></path>
+              <path d="M10 10.2v6"></path>
+              <path d="M14 10.2v6"></path>
+            </svg>
+          </button>
+
+          <button class="dock-main" id="quickSaveBtn" title="Guardar imagen PNG" aria-label="Guardar imagen PNG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v11"></path>
+              <path d="m7 10 5 5 5-5"></path>
+              <path d="M5 20h14"></path>
+            </svg>
+          </button>
+        </div>
+
+
+        <aside class="pen-popover" id="toolsPanel">
+          <div class="pen-popover-header">
+            <div class="pen-popover-title">
+              <strong id="panelTitle">Pinceles</strong>
+              <span id="toolReadout">Bolígrafo</span>
+            </div>
+
+            <div class="pen-popover-actions">
+              <div class="dock-position-group">
+                <button class="dock-pos-btn" data-side="left" id="dockLeftBtn" title="Acoplar a la izquierda">←</button>
+                <button class="dock-pos-btn" data-side="right" id="dockRightBtn" title="Acoplar a la derecha">→</button>
+                <button class="dock-pos-btn" data-side="top" id="dockTopBtn" title="Acoplar arriba">↑</button>
+                <button class="dock-pos-btn" data-side="bottom" id="dockBottomBtn" title="Acoplar abajo">↓</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="pen-popover-body">
+            <div class="panel-view is-active" id="brushesPanel">
+              <div class="brush-library">
+                <p class="brush-group-label">Tinta</p>
+
+                <button class="brush-preset tool-btn active" data-tool="brush" data-label="Bolígrafo" data-size="8" data-alpha="1" data-glow="0.08">
+                  <span class="brush-preset-name">Bolígrafo</span>
+                  <span class="brush-stroke brush-stroke--thin"></span>
+                </button>
+
+                <button class="brush-preset tool-btn" data-tool="brush" data-label="Pluma de inmersión" data-size="12" data-alpha="0.94" data-glow="0.12">
+                  <span class="brush-preset-name">Pluma de inmersión</span>
+                  <span class="brush-stroke brush-stroke--medium"></span>
+                </button>
+
+                <p class="brush-group-label">Efectos</p>
+
+                <button class="brush-preset tool-btn" data-tool="neon" data-label="Neón" data-size="18" data-alpha="1" data-glow="1">
+                  <span class="brush-preset-name">Neón</span>
+                  <span class="brush-stroke brush-stroke--neon-strong"></span>
+                </button>
+
+                <button class="brush-preset tool-btn" data-tool="spray" data-label="Aerógrafo suave" data-size="28" data-alpha="0.28" data-glow="0.1">
+                  <span class="brush-preset-name">Aerógrafo suave</span>
+                  <span class="brush-stroke brush-stroke--spray"></span>
+                </button>
+
+                <button class="brush-preset tool-btn" data-tool="spray" data-label="Niebla densa" data-size="40" data-alpha="0.18" data-glow="0.2">
+                  <span class="brush-preset-name">Niebla densa</span>
+                  <span class="brush-stroke brush-stroke--spray-wide"></span>
+                </button>
+
+                <p class="brush-group-label">Borrador</p>
+
+                <button class="brush-preset tool-btn" data-tool="eraser" data-label="Borrador fino" data-size="20" data-alpha="1" data-glow="0">
+                  <span class="brush-preset-name">Borrador fino</span>
+                  <span class="brush-stroke brush-stroke--eraser-thin"></span>
+                </button>
+
+                <button class="brush-preset tool-btn" data-tool="eraser" data-label="Borrador ancho" data-size="46" data-alpha="1" data-glow="0">
+                  <span class="brush-preset-name">Borrador ancho</span>
+                  <span class="brush-stroke brush-stroke--eraser-wide"></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="panel-view" id="colorsPanel">
+              <section class="pen-adjust-card" id="colorCard">
+                <div class="group-title"><span>Color</span><span>Muestras</span></div>
+                <input type="color" id="colorInput" value="#72f2ff" />
+                <div class="chips" id="paletteChips"></div>
+              </section>
+            </div>
+          </div>
+        </aside>
+
+      </div>
+
+      <aside class="top-adjust-panel" id="adjustPanel">
+        <div class="adjust-shell">
+          <button class="panel-drag-handle" id="adjustHandle" title="Mover panel de ajustes" aria-label="Mover panel de ajustes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 6h.01"></path>
+              <path d="M15 6h.01"></path>
+              <path d="M9 12h.01"></path>
+              <path d="M15 12h.01"></path>
+              <path d="M9 18h.01"></path>
+              <path d="M15 18h.01"></path>
+            </svg>
+          </button>
+          <section class="pen-adjust-card" id="strokeCard">
+            <label>
+              <div class="value-line"><span>Grosor</span><span id="sizeValue">12 px</span></div>
+              <input type="range" id="sizeInput" min="1" max="150" step="1" value="12" />
+            </label>
+            <label>
+              <div class="value-line"><span>Opacidad</span><span id="alphaValue">1.00</span></div>
+              <input type="range" id="alphaInput" min="0.05" max="1" step="0.01" value="1" />
+            </label>
+            <label>
+              <div class="value-line"><span>Glow</span><span id="glowValue">0.70</span></div>
+              <input type="range" id="glowInput" min="0" max="1" step="0.01" value="0.7" />
+            </label>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <div class="footer-fab" id="fabBar">
+      <button class="mini floating-lock-btn" id="floatLockBtn" title="Desbloquear menús flotantes" aria-label="Desbloquear menús flotantes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8 10V8a4 4 0 0 1 8 0v2"></path>
+          <rect x="5" y="10" width="14" height="10" rx="3"></rect>
+        </svg>
+      </button>
+      <button class="mini" id="quickHideBtn" title="Mostrar/ocultar panel">☰</button>
+      <button class="mini" id="quickFullscreenBtn" title="Pantalla completa">⤢</button>
+    </div>
+
+        <!-- Controles visibles en modo proyección -->
+    <div class="projection-ui" id="projectionUi">
+      <button id="projectionFullscreenBtn" title="Pantalla completa" aria-label="Pantalla completa">
+        <span class="btn-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
+            <path d="M16 3h3a2 2 0 0 1 2 2v3"></path>
+            <path d="M8 21H5a2 2 0 0 1-2-2v-3"></path>
+            <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+          </svg>
+          <span>Fullscreen</span>
+        </span>
+      </button>
+      <button id="projectionHudBtn" title="Mostrar u ocultar HUD" aria-label="Mostrar u ocultar HUD">
+        <span class="btn-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 5h18"></path>
+            <path d="M7 12h10"></path>
+            <path d="M10 19h4"></path>
+          </svg>
+          <span>HUD</span>
+        </span>
+      </button>
+    </div>
+  </div>
+
+    <script defer src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script defer src="./js/core/init.js"></script>
+    <script defer src="./js/modules/state-ui.js"></script>
+    <script defer src="./js/modules/network.js"></script>
+    <script defer src="./js/modules/canvas.js"></script>
+    <script defer src="./js/app.js"></script>
+</body>
+</html>
