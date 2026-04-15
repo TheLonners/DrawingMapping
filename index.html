@@ -4,12 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Car Projection Control</title>
-  <meta name="description" content="Control y proyección de dibujo sobre vehículo con PeerJS, canvas y modo tablet/proyección." />
-  <meta name="theme-color" content="#06070b" />
+  <meta name="description" content="Control y proyección de dibujo sobre vehículo con canvas y PeerJS." />
     <link rel="stylesheet" href="./css/styles.css" />
 </head>
 <body>
-  <!-- App principal -->
   <div id="app">
     <div class="stage-wrap">
       <canvas id="baseCanvas"></canvas>
@@ -18,13 +16,11 @@
       <div id="crosshair" class="crosshair"></div>
     </div>
 
-        <!-- HUD -->
     <div class="hud" id="hud">
       <div class="pill"><span class="mode-label" id="modeLabel">CONTROL MODE</span><span id="roomReadout">Sala: —</span></div>
       <div class="pill"><span class="dot disconnected" id="statusDot"></span><span id="statusText">Sin conexión</span></div>
     </div>
 
-        <!-- Paneles de control -->
     <div class="shell" id="controlShell">
       
       <aside class="toolbar hidden" id="toolbar">
@@ -272,7 +268,6 @@
       <button class="mini" id="quickFullscreenBtn" title="Pantalla completa">⤢</button>
     </div>
 
-        <!-- Controles visibles en modo proyección -->
     <div class="projection-ui" id="projectionUi">
       <button id="projectionFullscreenBtn" title="Pantalla completa" aria-label="Pantalla completa">
         <span class="btn-label">
@@ -299,10 +294,6 @@
   </div>
 
     <script defer src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-    <script defer src="./js/core/init.js"></script>
-    <script defer src="./js/modules/state-ui.js"></script>
-    <script defer src="./js/modules/network.js"></script>
-    <script defer src="./js/modules/canvas.js"></script>
-    <script defer src="./js/app.js"></script>
+  <script defer src="./js/app.js"></script>
 </body>
 </html>

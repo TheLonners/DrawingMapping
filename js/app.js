@@ -345,16 +345,66 @@
         quickPaletteBtn.style.color = state.color;
       }
 
+      function getAdjustPanelMetrics() {
+        const isMobileViewport = window.innerWidth <= 900;
+        const marginX = isMobileViewport ? 12 : 8;
+        const minY = 66;
+
+        if (!isMobileViewport) {
+          return {
+            isMobileViewport,
+            width: null,
+            minX: marginX,
+            maxX: Math.max(marginX, window.innerWidth - (adjustPanel.offsetWidth || 520) - marginX),
+            minY,
+            maxY: Math.max(minY, window.innerHeight - (adjustPanel.offsetHeight || 76) - 8)
+          };
+        }
+
+        const dockOnSide = state.ui.dockSide === 'right' || state.ui.dockSide === 'left';
+        const dockSpace = dockOnSide ? ((penDockRoot?.offsetWidth || 84) + 16) : 0;
+        const availableWidth = clamp(window.innerWidth - (marginX * 2) - dockSpace, 240, Math.max(240, window.innerWidth - (marginX * 2)));
+        const minX = state.ui.dockSide === 'left' ? (dockSpace + marginX) : marginX;
+        const maxX = state.ui.dockSide === 'right'
+          ? Math.max(minX, window.innerWidth - availableWidth - dockSpace - marginX)
+          : Math.max(minX, window.innerWidth - availableWidth - marginX);
+
+        return {
+          isMobileViewport,
+          width: availableWidth,
+          minX,
+          maxX,
+          minY,
+          maxY: Math.max(minY, window.innerHeight - (adjustPanel.offsetHeight || 76) - 8)
+        };
+      }
+
       function applyAdjustPanelPosition() {
         if (!adjustPanel || isProjection) return;
-        const panelWidth = adjustPanel.offsetWidth || 520;
-        const panelHeight = adjustPanel.offsetHeight || 76;
-        const nextX = clamp(state.ui.adjustPanelX, 8, Math.max(8, window.innerWidth - panelWidth - 8));
-        const nextY = clamp(state.ui.adjustPanelY, 66, Math.max(66, window.innerHeight - panelHeight - 8));
-        state.ui.adjustPanelX = nextX;
-        state.ui.adjustPanelY = nextY;
-        adjustPanel.style.left = nextX + 'px';
-        adjustPanel.style.top = nextY + 'px';
+
+        const metrics = getAdjustPanelMetrics();
+
+        if (metrics.isMobileViewport && metrics.width) {
+          adjustPanel.style.width = metrics.width + 'px';
+          adjustPanel.style.maxWidth = metrics.width + 'px';
+        } else {
+          adjustPanel.style.width = '';
+          adjustPanel.style.maxWidth = '';
+        }
+
+        requestAnimationFrame(() => {
+          const panelWidth = adjustPanel.offsetWidth || metrics.width || 520;
+          const panelHeight = adjustPanel.offsetHeight || 76;
+          const minX = metrics.minX;
+          const maxX = Math.max(minX, metrics.maxX ?? (window.innerWidth - panelWidth - 8));
+          const nextX = clamp(state.ui.adjustPanelX, minX, maxX);
+          const nextY = clamp(state.ui.adjustPanelY, metrics.minY, Math.max(metrics.minY, window.innerHeight - panelHeight - 8));
+
+          state.ui.adjustPanelX = nextX;
+          state.ui.adjustPanelY = nextY;
+          adjustPanel.style.left = nextX + 'px';
+          adjustPanel.style.top = nextY + 'px';
+        });
       }
 
       function updateFloatingLockUi() {
@@ -375,6 +425,7 @@
         state.ui.dockOffset = offset;
         persistUiState();
         applyDockPosition();
+        applyAdjustPanelPosition();
       }
 
       function nearestDockSide(rect) {
@@ -436,8 +487,11 @@
 
       function moveAdjustDrag(event) {
         if (!adjustDrag) return;
-        state.ui.adjustPanelX = clamp(event.clientX - adjustDrag.offsetX, 8, Math.max(8, window.innerWidth - adjustPanel.offsetWidth - 8));
-        state.ui.adjustPanelY = clamp(event.clientY - adjustDrag.offsetY, 66, Math.max(66, window.innerHeight - adjustPanel.offsetHeight - 8));
+        const metrics = getAdjustPanelMetrics();
+        const panelWidth = adjustPanel.offsetWidth || metrics.width || 520;
+        const panelHeight = adjustPanel.offsetHeight || 76;
+        state.ui.adjustPanelX = clamp(event.clientX - adjustDrag.offsetX, metrics.minX, Math.max(metrics.minX, window.innerWidth - panelWidth - 8));
+        state.ui.adjustPanelY = clamp(event.clientY - adjustDrag.offsetY, metrics.minY, Math.max(metrics.minY, window.innerHeight - panelHeight - 8));
         applyAdjustPanelPosition();
       }
 
@@ -779,6 +833,12 @@
             renderRemoteStroke(msg.stroke);
             break;
           }
+          case 'commitStroke': {
+            if (msg.tool === 'neon') {
+              commitFxToDraw(false);
+            }
+            break;
+          }
           case 'clearDraw': {
             clearCanvas(drawCtx, drawCanvas);
             break;
@@ -822,6 +882,44 @@
 
       function clearCanvas(ctx, canvas) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function usesFxLayer(tool) {
+        return tool === 'neon';
+      }
+
+      function getGuideRectForCanvas(canvas) {
+        if (!state.baseImageObject) return null;
+        if (state.baseImageRectNorm) {
+          return {
+            x: state.baseImageRectNorm.x * canvas.width,
+            y: state.baseImageRectNorm.y * canvas.height,
+            w: state.baseImageRectNorm.w * canvas.width,
+            h: state.baseImageRectNorm.h * canvas.height
+          };
+        }
+        return fitImageRect(state.baseImageObject.width, state.baseImageObject.height, canvas.width, canvas.height);
+      }
+
+      function drawGuideOverlay(targetCtx, targetCanvas) {
+        if (!state.baseImageObject) return false;
+        const rect = getGuideRectForCanvas(targetCanvas);
+        if (!rect) return false;
+        targetCtx.drawImage(state.baseImageObject, rect.x, rect.y, rect.w, rect.h);
+        return true;
+      }
+
+      function commitFxToDraw(notifyPeer = false) {
+        const hasPixels = fxCanvas.width > 0 && fxCanvas.height > 0;
+        if (!hasPixels) return;
+        drawCtx.save();
+        drawCtx.globalCompositeOperation = 'source-over';
+        drawCtx.drawImage(fxCanvas, 0, 0);
+        drawCtx.restore();
+        clearCanvas(fxCtx, fxCanvas);
+        if (notifyPeer) {
+          send({ type: 'commitStroke', tool: 'neon' });
+        }
       }
 
       function renderAll() {
@@ -937,17 +1035,285 @@
         const rect = drawCanvas.getBoundingClientRect();
         const x = (event.clientX - rect.left) * (drawCanvas.width / rect.width);
         const y = (event.clientY - rect.top) * (drawCanvas.height / rect.height);
-        return { x, y };
+        const pressureRaw = typeof event.pressure === 'number' && event.pressure > 0 ? event.pressure : 1;
+        const pressure = event.pointerType === 'pen' ? clamp(pressureRaw, 0.08, 1) : 1;
+        return { x, y, pressure };
       }
 
-      function rgba(hex, alpha) {
-        const clean = hex.replace('#', '');
-        const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean;
-        const num = parseInt(full, 16);
-        const r = (num >> 16) & 255;
-        const g = (num >> 8) & 255;
-        const b = num & 255;
-        return `rgba(${r},${g},${b},${alpha})`;
+      function applyAlphaToColor(color, alpha) {
+        const safeAlpha = clamp(alpha ?? 1, 0, 1);
+        if (!color) return `rgba(255,255,255,${safeAlpha})`;
+        if (color.startsWith('#')) {
+          const clean = color.replace('#', '');
+          const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean;
+          const num = parseInt(full, 16);
+          const r = (num >> 16) & 255;
+          const g = (num >> 8) & 255;
+          const b = num & 255;
+          return `rgba(${r},${g},${b},${safeAlpha})`;
+        }
+        if (color.startsWith('rgba(')) {
+          return color.replace(/rgba\(([^)]+),\s*[^,()]+\)$/i, `rgba($1, ${safeAlpha})`);
+        }
+        if (color.startsWith('rgb(')) {
+          return color.replace(/^rgb\(([^)]+)\)$/i, `rgba($1, ${safeAlpha})`);
+        }
+        return color;
+      }
+
+      function rgba(color, alpha) {
+        return applyAlphaToColor(color, alpha);
+      }
+
+      function toNormPoint(point) {
+        return {
+          xNorm: point.x / drawCanvas.width,
+          yNorm: point.y / drawCanvas.height,
+          pressure: clamp(point.pressure ?? 1, 0.08, 1)
+        };
+      }
+
+      function fromStrokePoint(point) {
+        if (point.xNorm != null && point.yNorm != null) {
+          return {
+            x: point.xNorm * drawCanvas.width,
+            y: point.yNorm * drawCanvas.height,
+            pressure: clamp(point.pressure ?? 1, 0.08, 1)
+          };
+        }
+        return {
+          x: point.x,
+          y: point.y,
+          pressure: clamp(point.pressure ?? 1, 0.08, 1)
+        };
+      }
+
+      function getRenderableStrokePoints(stroke) {
+        const pts = stroke.points || [];
+        if (pts.length <= 3) return pts.slice();
+        return pts.slice(-3);
+      }
+
+      function getMidPoint(a, b) {
+        return {
+          x: (a.x + b.x) * 0.5,
+          y: (a.y + b.y) * 0.5
+        };
+      }
+
+      function getPressureAdjustedSize(stroke, point, multiplier = 1) {
+        const pressure = clamp(point?.pressure ?? 1, 0.18, 1);
+        const pressureBoost = 0.45 + pressure * 0.55;
+        return Math.max(0.75, stroke.size * multiplier * pressureBoost);
+      }
+
+      function getCurveSegment(points) {
+        if (!points || points.length < 2) return null;
+        const p2 = points[points.length - 1];
+        const p1 = points[points.length - 2];
+        const p0 = points.length > 2 ? points[points.length - 3] : p1;
+        return {
+          p0,
+          p1,
+          p2,
+          mid1: getMidPoint(p0, p1),
+          mid2: getMidPoint(p1, p2)
+        };
+      }
+
+      function traceCurve(ctx, points) {
+        const segment = getCurveSegment(points);
+        if (!segment) return false;
+        ctx.beginPath();
+        ctx.moveTo(segment.mid1.x, segment.mid1.y);
+        ctx.quadraticCurveTo(segment.p1.x, segment.p1.y, segment.mid2.x, segment.mid2.y);
+        ctx.stroke();
+        return true;
+      }
+
+      function traceWholeCurve(ctx, points) {
+        if (!points || points.length < 2) return false;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+
+        for (let i = 1; i < points.length - 1; i++) {
+          const midX = (points[i].x + points[i + 1].x) * 0.5;
+          const midY = (points[i].y + points[i + 1].y) * 0.5;
+          ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+        }
+
+        const last = points[points.length - 1];
+        ctx.lineTo(last.x, last.y);
+        ctx.stroke();
+        return true;
+      }
+
+      function erasePoint(point, stroke) {
+        [
+          { ctx: drawCtx, radiusMultiplier: 0.72 },
+          { ctx: fxCtx, radiusMultiplier: 1.08 }
+        ].forEach(layer => {
+          layer.ctx.save();
+          layer.ctx.globalCompositeOperation = 'destination-out';
+          layer.ctx.beginPath();
+          layer.ctx.arc(point.x, point.y, getPressureAdjustedSize(stroke, point, layer.radiusMultiplier), 0, Math.PI * 2);
+          layer.ctx.fill();
+          layer.ctx.restore();
+        });
+      }
+
+      function sprayBurstAt(point, stroke, densityMultiplier = 1) {
+        const radius = Math.max(2, getPressureAdjustedSize(stroke, point));
+        const density = Math.max(8, Math.floor(stroke.size * 1.45 * densityMultiplier));
+        drawCtx.save();
+        drawCtx.globalCompositeOperation = 'source-over';
+        drawCtx.fillStyle = applyAlphaToColor(stroke.color, clamp(stroke.alpha, 0.03, 1));
+        for (let i = 0; i < density; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = Math.sqrt(Math.random()) * radius;
+          const sprayX = point.x + Math.cos(angle) * dist;
+          const sprayY = point.y + Math.sin(angle) * dist;
+          const dropSize = Math.max(0.7, Math.random() * (stroke.glow * 3 + 1.4));
+          drawCtx.fillRect(sprayX, sprayY, dropSize, dropSize);
+        }
+        drawCtx.restore();
+      }
+
+      function renderBrushPoint(_ctx, point, stroke) {
+        const tool = stroke.tool;
+        if (tool === 'eraser') {
+          erasePoint(point, stroke);
+          return;
+        }
+        if (tool === 'spray') {
+          sprayBurstAt(point, stroke, 0.9);
+          return;
+        }
+        if (tool === 'neon') {
+          const pointStroke = { ...stroke, points: [point, { ...point, x: point.x + 0.01, y: point.y + 0.01 }] };
+          clearCanvas(fxCtx, fxCanvas);
+          drawNeonLine(fxCtx, pointStroke);
+          return;
+        }
+
+        drawCtx.save();
+        drawCtx.globalCompositeOperation = 'source-over';
+        drawCtx.fillStyle = applyAlphaToColor(stroke.color, stroke.alpha);
+        drawCtx.beginPath();
+        drawCtx.arc(point.x, point.y, Math.max(0.8, getPressureAdjustedSize(stroke, point) * 0.5), 0, Math.PI * 2);
+        drawCtx.fill();
+        drawCtx.restore();
+      }
+
+      function renderStrokeContinuously(_ctx, strokeParams) {
+        const pts = strokeParams.points || [];
+        if (!pts.length) return;
+        if (pts.length < 2) {
+          renderBrushPoint(drawCtx, pts[0], strokeParams);
+          return;
+        }
+
+        drawCtx.lineCap = 'round';
+        drawCtx.lineJoin = 'round';
+        fxCtx.lineCap = 'round';
+        fxCtx.lineJoin = 'round';
+
+        switch (strokeParams.tool) {
+          case 'brush':
+            drawStandardFluidLine(drawCtx, pts, strokeParams);
+            break;
+          case 'eraser':
+            drawEraserLine(pts, strokeParams);
+            break;
+          case 'neon':
+            clearCanvas(fxCtx, fxCanvas);
+            drawNeonLine(fxCtx, strokeParams);
+            break;
+          case 'spray':
+            drawSprayPattern(drawCtx, pts, strokeParams);
+            break;
+          default:
+            drawStandardFluidLine(drawCtx, pts, strokeParams);
+            break;
+        }
+      }
+
+      function drawStandardFluidLine(ctx, pts, params) {
+        const segment = getCurveSegment(pts);
+        if (!segment) return;
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = applyAlphaToColor(params.color, params.alpha);
+        ctx.lineWidth = getPressureAdjustedSize(params, segment.p2);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        traceCurve(ctx, pts);
+        ctx.restore();
+      }
+
+      function drawEraserLine(pts, params) {
+        const segment = getCurveSegment(pts);
+        if (!segment) return;
+        [
+          { ctx: drawCtx, widthMultiplier: 1.18 },
+          { ctx: fxCtx, widthMultiplier: 1.78 }
+        ].forEach(layer => {
+          layer.ctx.save();
+          layer.ctx.globalCompositeOperation = 'destination-out';
+          layer.ctx.strokeStyle = 'rgba(0,0,0,1)';
+          layer.ctx.lineWidth = getPressureAdjustedSize(params, segment.p2, layer.widthMultiplier);
+          layer.ctx.lineCap = 'round';
+          layer.ctx.lineJoin = 'round';
+          traceCurve(layer.ctx, pts);
+          layer.ctx.restore();
+        });
+      }
+
+      function drawNeonLine(ctx, params) {
+        const pts = params.points || [];
+        if (pts.length < 2) return;
+
+        const lastPoint = pts[pts.length - 1];
+        const strokeSize = getPressureAdjustedSize(params, lastPoint);
+        const haloSize = strokeSize;
+        const coreSize = Math.max(1, strokeSize * 0.35);
+        const blurAmount = strokeSize * clamp(params.glow ?? 0.5, 0, 1) * 1.5;
+        const alphaBase = clamp(params.alpha ?? 1, 0.05, 1);
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        ctx.shadowBlur = blurAmount;
+        ctx.shadowColor = params.color;
+        ctx.lineWidth = haloSize;
+        ctx.strokeStyle = applyAlphaToColor(params.color, alphaBase * 0.85);
+        traceWholeCurve(ctx, pts);
+
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = 'transparent';
+        ctx.lineWidth = coreSize;
+        ctx.strokeStyle = '#ffffff';
+        traceWholeCurve(ctx, pts);
+
+        ctx.restore();
+      }
+
+      function drawSprayPattern(ctx, pts, params) {
+        const lastPoint = pts[pts.length - 1];
+        const prevPoint = pts.length > 1 ? pts[pts.length - 2] : lastPoint;
+        const travel = Math.max(1, Math.hypot(lastPoint.x - prevPoint.x, lastPoint.y - prevPoint.y));
+        const bursts = Math.max(1, Math.ceil(travel / 8));
+        for (let i = 0; i < bursts; i++) {
+          const t = bursts === 1 ? 1 : i / (bursts - 1);
+          const point = {
+            x: prevPoint.x + (lastPoint.x - prevPoint.x) * t,
+            y: prevPoint.y + (lastPoint.y - prevPoint.y) * t,
+            pressure: lastPoint.pressure ?? 1
+          };
+          sprayBurstAt(point, params, 0.85);
+        }
       }
 
       function beginStroke(point) {
@@ -963,16 +1329,12 @@
           points: [point]
         };
 
-        const tinyPoint = { x: point.x + 0.01, y: point.y + 0.01 };
-        renderStrokeSegment(point, tinyPoint, state.activeStroke);
+        renderBrushPoint(drawCtx, point, state.activeStroke);
         send({
           type: 'drawStroke',
           stroke: {
             ...state.activeStroke,
-            points: [
-              { xNorm: point.x / drawCanvas.width, yNorm: point.y / drawCanvas.height },
-              { xNorm: tinyPoint.x / drawCanvas.width, yNorm: tinyPoint.y / drawCanvas.height }
-            ]
+            points: [toNormPoint(point)]
           }
         });
 
@@ -986,19 +1348,18 @@
 
       function extendStroke(point) {
         if (!state.pointerDown || !state.activeStroke) return;
-        const stroke = state.activeStroke;
-        const prev = stroke.points[stroke.points.length - 1];
-        stroke.points.push(point);
-        renderStrokeSegment(prev, point, stroke);
+        state.activeStroke.points.push(point);
+        renderStrokeContinuously(drawCtx, state.activeStroke);
+
+        if (state.activeStroke.tool !== 'neon' && state.activeStroke.points.length > 12) {
+          state.activeStroke.points = state.activeStroke.points.slice(-6);
+        }
 
         send({
           type: 'drawStroke',
           stroke: {
-            ...stroke,
-            points: [
-              { xNorm: prev.x / drawCanvas.width, yNorm: prev.y / drawCanvas.height },
-              { xNorm: point.x / drawCanvas.width, yNorm: point.y / drawCanvas.height }
-            ]
+            ...state.activeStroke,
+            points: (state.activeStroke.tool === 'neon' ? state.activeStroke.points : getRenderableStrokePoints(state.activeStroke)).map(toNormPoint)
           }
         });
 
@@ -1012,147 +1373,32 @@
 
       function endStroke() {
         if (!state.pointerDown) return;
+        const finishedStroke = state.activeStroke;
         state.pointerDown = false;
         state.activeStroke = null;
+        if (finishedStroke && usesFxLayer(finishedStroke.tool)) {
+          commitFxToDraw(true);
+        }
         send({ type: 'pointerPreview', show: false });
       }
 
       function renderRemoteStroke(stroke) {
-        if (!stroke || !stroke.points || stroke.points.length < 2) return;
-        const a = stroke.points[0].xNorm != null
-          ? { x: stroke.points[0].xNorm * drawCanvas.width, y: stroke.points[0].yNorm * drawCanvas.height }
-          : stroke.points[0];
-        const b = stroke.points[1].xNorm != null
-          ? { x: stroke.points[1].xNorm * drawCanvas.width, y: stroke.points[1].yNorm * drawCanvas.height }
-          : stroke.points[1];
-        renderStrokeSegment(a, b, { ...stroke, points: [a, b] });
-      }
-
-      function renderStrokeSegment(a, b, stroke) {
-        const tool = stroke.tool;
-        if (tool === 'spray') return spraySegment(a, b, stroke);
-        if (tool === 'neon') return neonSegment(a, b, stroke);
-        if (tool === 'eraser') return eraserSegment(a, b, stroke);
-        return brushSegment(a, b, stroke);
-      }
-
-      function brushSegment(a, b, stroke) {
-        drawCtx.save();
-        drawCtx.globalCompositeOperation = 'source-over';
-        drawCtx.strokeStyle = rgba(stroke.color, stroke.alpha);
-        drawCtx.lineWidth = stroke.size;
-        drawCtx.lineCap = 'round';
-        drawCtx.lineJoin = 'round';
-        drawCtx.beginPath();
-        drawCtx.moveTo(a.x, a.y);
-        drawCtx.quadraticCurveTo(a.x, a.y, b.x, b.y);
-        drawCtx.stroke();
-        drawCtx.restore();
-      }
-
-      function neonSegment(a, b, stroke) {
-        const glowStrength = clamp(stroke.glow ?? 0.5, 0, 1);
-        const alphaVal = clamp(stroke.alpha ?? 1, 0.05, 1);
-        const baseSize = Math.max(1.2, stroke.size * 0.4);
-        const haloOuterWidth = baseSize * (2.25 + glowStrength * 0.95);
-        const haloInnerWidth = baseSize * (1.35 + glowStrength * 0.38);
-        const haloOuterBlur = baseSize * (3.8 + glowStrength * 2.1);
-        const haloInnerBlur = baseSize * (1.6 + glowStrength * 0.9);
-
-        fxCtx.save();
-        fxCtx.globalCompositeOperation = 'screen';
-        fxCtx.lineCap = 'round';
-        fxCtx.lineJoin = 'round';
-
-        fxCtx.shadowColor = rgba(stroke.color, 1);
-        fxCtx.shadowBlur = haloOuterBlur;
-        fxCtx.strokeStyle = rgba(stroke.color, (0.08 + glowStrength * 0.04) * alphaVal);
-        fxCtx.lineWidth = haloOuterWidth;
-        fxCtx.beginPath();
-        fxCtx.moveTo(a.x, a.y);
-        fxCtx.lineTo(b.x, b.y);
-        fxCtx.stroke();
-
-        fxCtx.shadowBlur = haloInnerBlur;
-        fxCtx.strokeStyle = rgba(stroke.color, (0.12 + glowStrength * 0.06) * alphaVal);
-        fxCtx.lineWidth = haloInnerWidth;
-        fxCtx.beginPath();
-        fxCtx.moveTo(a.x, a.y);
-        fxCtx.lineTo(b.x, b.y);
-        fxCtx.stroke();
-        fxCtx.restore();
-
-        drawCtx.save();
-        drawCtx.lineCap = 'round';
-        drawCtx.lineJoin = 'round';
-        drawCtx.globalCompositeOperation = 'screen';
-
-        const bodyAlpha = Math.min(1, alphaVal * 0.68);
-        drawCtx.strokeStyle = rgba(stroke.color, bodyAlpha);
-        drawCtx.lineWidth = Math.max(1.2, baseSize);
-        drawCtx.beginPath();
-        drawCtx.moveTo(a.x, a.y);
-        drawCtx.lineTo(b.x, b.y);
-        drawCtx.stroke();
-
-        drawCtx.strokeStyle = rgba(stroke.color, Math.min(1, alphaVal * 0.38));
-        drawCtx.lineWidth = Math.max(0.9, baseSize * 0.62);
-        drawCtx.beginPath();
-        drawCtx.moveTo(a.x, a.y);
-        drawCtx.lineTo(b.x, b.y);
-        drawCtx.stroke();
-
-        drawCtx.globalCompositeOperation = 'source-over';
-        drawCtx.strokeStyle = `rgba(255,255,255,${Math.min(1, alphaVal * 0.82).toFixed(3)})`;
-        drawCtx.lineWidth = Math.max(0.7, baseSize * 0.26);
-        drawCtx.beginPath();
-        drawCtx.moveTo(a.x, a.y);
-        drawCtx.lineTo(b.x, b.y);
-        drawCtx.stroke();
-        drawCtx.restore();
-      }
-
-
-      function spraySegment(a, b, stroke) {
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.max(1, Math.hypot(dx, dy));
-        const steps = Math.ceil(dist / 4);
-        drawCtx.save();
-        drawCtx.fillStyle = rgba(stroke.color, Math.max(0.03, stroke.alpha * 0.16));
-        for (let i = 0; i < steps; i++) {
-          const t = i / steps;
-          const x = a.x + dx * t;
-          const y = a.y + dy * t;
-          const count = Math.max(10, Math.floor(stroke.size * 1.2));
-          for (let j = 0; j < count; j++) {
-            const ang = Math.random() * Math.PI * 2;
-            const rad = Math.random() * stroke.size;
-            drawCtx.beginPath();
-            drawCtx.arc(x + Math.cos(ang) * rad, y + Math.sin(ang) * rad, Math.random() * 1.7 + 0.4, 0, Math.PI * 2);
-            drawCtx.fill();
+        if (!stroke || !stroke.points || !stroke.points.length) return;
+        const hydratedPoints = stroke.points.map(fromStrokePoint);
+        const hydratedStroke = { ...stroke, points: hydratedPoints };
+        if (hydratedStroke.tool === 'neon') {
+          if (hydratedPoints.length === 1) {
+            renderBrushPoint(fxCtx, hydratedPoints[0], hydratedStroke);
+            return;
           }
+          renderStrokeContinuously(fxCtx, hydratedStroke);
+          return;
         }
-        drawCtx.restore();
-      }
-
-      function eraserSegment(a, b, stroke) {
-        [
-          { ctx: drawCtx, width: stroke.size * 1.25 },
-          { ctx: fxCtx, width: stroke.size * 1.9 }
-        ].forEach(layer => {
-          layer.ctx.save();
-          layer.ctx.globalCompositeOperation = 'destination-out';
-          layer.ctx.strokeStyle = 'rgba(0,0,0,1)';
-          layer.ctx.lineWidth = layer.width;
-          layer.ctx.lineCap = 'round';
-          layer.ctx.lineJoin = 'round';
-          layer.ctx.beginPath();
-          layer.ctx.moveTo(a.x, a.y);
-          layer.ctx.lineTo(b.x, b.y);
-          layer.ctx.stroke();
-          layer.ctx.restore();
-        });
+        if (hydratedPoints.length === 1) {
+          renderBrushPoint(drawCtx, hydratedPoints[0], hydratedStroke);
+          return;
+        }
+        renderStrokeContinuously(drawCtx, hydratedStroke);
       }
 
       function setTool(tool) {
@@ -1194,6 +1440,63 @@
         initPeer();
       }
 
+      function tryLoadImageSource(src) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(src);
+          img.onerror = reject;
+          img.src = src;
+        });
+      }
+
+      function blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      async function tryLoadImageAsDataUrl(src) {
+        const response = await fetch(src, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`No se pudo cargar ${src}`);
+        const blob = await response.blob();
+        return blobToDataUrl(blob);
+      }
+
+      async function autoLoadGuideImage() {
+        if (state.baseImageData) return false;
+
+        const candidates = ['./assets/guia.png', './guia.png'];
+        for (const src of candidates) {
+          try {
+            const dataUrl = await tryLoadImageAsDataUrl(src);
+            state.baseImageData = dataUrl;
+            state.baseImageVisible = true;
+            state.baseImageRect = null;
+            state.baseImageRectNorm = null;
+            loadBaseImageFromState();
+            broadcastState(true);
+            return true;
+          } catch (_) {
+            try {
+              await tryLoadImageSource(src);
+              state.baseImageData = src;
+              state.baseImageVisible = true;
+              state.baseImageRect = null;
+              state.baseImageRectNorm = null;
+              loadBaseImageFromState();
+              broadcastState(true);
+              return true;
+            } catch (_) {}
+          }
+        }
+
+        return false;
+      }
+
       async function loadLocalImage(file) {
         const reader = new FileReader();
         reader.onload = () => {
@@ -1228,44 +1531,99 @@
         simpleToast('Lienzo limpiado');
       }
 
-      function exportArtwork() {
-        const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = drawCanvas.width;
-        exportCanvas.height = drawCanvas.height;
-        const exportCtx = exportCanvas.getContext('2d');
+      function isMobileLikeDevice() {
+        return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent || '') || window.innerWidth <= 900;
+      }
 
-        if (state.blackBg) {
-          exportCtx.fillStyle = '#000';
-          exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-        }
+      function dataUrlToFile(dataUrl, filename) {
+        const [header, body] = dataUrl.split(',');
+        const mimeMatch = /data:(.*?);base64/.exec(header || '');
+        const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+        const binary = atob(body || '');
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return new File([bytes], filename, { type: mime });
+      }
 
-        exportCtx.drawImage(baseCanvas, 0, 0);
-        exportCtx.drawImage(drawCanvas, 0, 0);
-        exportCtx.drawImage(fxCanvas, 0, 0);
+      function triggerDownloadUrl(url, filename) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
 
-        const stamp = new Date();
-        const filename = `dibujo-${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}.png`;
-
-        const triggerDownload = url => {
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          if (url.startsWith('blob:')) {
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
+      async function exportArtwork() {
+        try {
+          if (state.pointerDown && state.activeStroke && usesFxLayer(state.activeStroke.tool)) {
+            commitFxToDraw(true);
           }
-          simpleToast('Imagen guardada');
-        };
 
-        if (exportCanvas.toBlob) {
-          exportCanvas.toBlob(blob => {
-            if (!blob) return;
-            triggerDownload(URL.createObjectURL(blob));
-          }, 'image/png');
-        } else {
-          triggerDownload(exportCanvas.toDataURL('image/png'));
+          const composite = document.createElement('canvas');
+          composite.width = drawCanvas.width;
+          composite.height = drawCanvas.height;
+          const ctx = composite.getContext('2d');
+
+          if (state.blackBg) {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, composite.width, composite.height);
+          }
+
+          ctx.drawImage(drawCanvas, 0, 0);
+          ctx.drawImage(fxCanvas, 0, 0);
+
+          if (state.baseImageObject) {
+            drawGuideOverlay(ctx, composite);
+          }
+
+          const dataUrl = composite.toDataURL('image/png', 1.0);
+          const filename = `car-projection-${Date.now()}.png`;
+
+          if (isMobileLikeDevice()) {
+            try {
+              const res = await fetch(dataUrl);
+              const blob = await res.blob();
+              const file = new File([blob], filename, { type: 'image/png' });
+
+              if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                await navigator.share({
+                  files: [file],
+                  title: 'Exportación de proyección',
+                  text: 'Dibujo exportado desde Car Projection Studio.'
+                });
+                simpleToast('Compartiendo imagen…');
+                return;
+              }
+            } catch (shareErr) {
+              console.warn('El menú de compartir falló o se canceló, forzando descarga...', shareErr);
+            }
+          }
+
+          try {
+            triggerDownloadUrl(dataUrl, filename);
+            simpleToast('Imagen descargada exitosamente');
+            return;
+          } catch (downloadErr) {
+            console.warn('La descarga directa falló, intentando vista previa...', downloadErr);
+          }
+
+          if (isMobileLikeDevice()) {
+            const previewWindow = window.open('', '_blank');
+            if (previewWindow) {
+              previewWindow.document.write(`<!doctype html><title>${filename}</title><style>html,body{margin:0;background:#000;display:grid;place-items:center;height:100%}img{max-width:100%;max-height:100%;object-fit:contain}</style><img src="${dataUrl}" alt="${filename}">`);
+              previewWindow.document.close();
+              simpleToast('Abre la imagen y mantenla presionada para guardarla');
+              return;
+            }
+          }
+
+          window.location.href = dataUrl;
+          simpleToast('Imagen generada');
+        } catch (e) {
+          console.error(e);
+          simpleToast('Error general al exportar');
         }
       }
 
@@ -1419,6 +1777,11 @@
             yNorm: p.y / drawCanvas.height,
             show: true
           });
+
+          if (state.pointerDown && state.activeStroke && state.activeStroke.tool === 'neon') {
+            fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+          }
+
           if (state.pointerDown) extendStroke(p);
         }
       }
@@ -1464,6 +1827,7 @@
       togglePenPanel(false);
       syncUiFromState();
       resizeCanvases();
+      autoLoadGuideImage();
       updateFloatingLockUi();
       blackBgBtn.classList.toggle('active', state.blackBg);
 

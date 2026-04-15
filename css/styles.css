@@ -817,6 +817,19 @@
       width: min(320px, calc(100vw - 112px));
     }
 
+
+    #strokeCard,
+    #strokeCard > label,
+    #strokeCard input[type="range"] {
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    .top-adjust-panel,
+    .adjust-shell {
+      box-sizing: border-box;
+    }
+
     @media (max-width: 900px) {
       .pen-popover,
       .utility-popover {
@@ -826,10 +839,13 @@
       .top-adjust-panel {
         top: 72px;
         left: 12px;
+        width: min(430px, calc(100vw - 112px));
+        max-width: calc(100vw - 112px);
       }
 
       .adjust-shell {
-        width: calc(100vw - 24px);
+        width: 100%;
+        max-width: 100%;
         flex-direction: column;
       }
 
@@ -842,7 +858,18 @@
 
       #strokeCard {
         width: 100%;
+        max-width: 100%;
         grid-template-columns: 1fr;
+        overflow: hidden;
+      }
+
+      #strokeCard > label {
+        width: 100%;
+        overflow: hidden;
+      }
+
+      #strokeCard > label .value-line {
+        width: 100%;
       }
 
       .pen-popover-header {
