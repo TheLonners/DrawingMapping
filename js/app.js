@@ -834,9 +834,7 @@
             break;
           }
           case 'commitStroke': {
-            if (msg.tool === 'neon') {
-              commitFxToDraw(false);
-            }
+            commitFxToDraw(false, msg.tool || 'neon');
             break;
           }
           case 'clearDraw': {
@@ -884,8 +882,14 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
 
-      function usesFxLayer(tool) {
-        return tool === 'neon';
+      function usesFxLayer(strokeOrTool) {
+        if (!strokeOrTool) return false;
+        if (typeof strokeOrTool === 'string') {
+          return strokeOrTool === 'neon';
+        }
+        const stroke = strokeOrTool;
+        const alpha = clamp(stroke.alpha ?? 1, 0.05, 1);
+        return stroke.tool === 'neon' || (stroke.tool === 'brush' && alpha < 0.999);
       }
 
       function getGuideRectForCanvas(canvas) {
@@ -909,7 +913,7 @@
         return true;
       }
 
-      function commitFxToDraw(notifyPeer = false) {
+      function commitFxToDraw(notifyPeer = false, tool = state.activeStroke?.tool || 'neon') {
         const hasPixels = fxCanvas.width > 0 && fxCanvas.height > 0;
         if (!hasPixels) return;
         drawCtx.save();
@@ -918,7 +922,7 @@
         drawCtx.restore();
         clearCanvas(fxCtx, fxCanvas);
         if (notifyPeer) {
-          send({ type: 'commitStroke', tool: 'neon' });
+          send({ type: 'commitStroke', tool });
         }
       }
 
@@ -1179,8 +1183,9 @@
         drawCtx.restore();
       }
 
-      function renderBrushPoint(_ctx, point, stroke) {
+      function renderBrushPoint(ctx, point, stroke) {
         const tool = stroke.tool;
+        const targetCtx = usesFxLayer(stroke) ? fxCtx : (ctx || drawCtx);
         if (tool === 'eraser') {
           erasePoint(point, stroke);
           return;
@@ -1196,20 +1201,25 @@
           return;
         }
 
-        drawCtx.save();
-        drawCtx.globalCompositeOperation = 'source-over';
-        drawCtx.fillStyle = applyAlphaToColor(stroke.color, stroke.alpha);
-        drawCtx.beginPath();
-        drawCtx.arc(point.x, point.y, Math.max(0.8, getPressureAdjustedSize(stroke, point) * 0.5), 0, Math.PI * 2);
-        drawCtx.fill();
-        drawCtx.restore();
+        if (targetCtx === fxCtx) {
+          clearCanvas(fxCtx, fxCanvas);
+        }
+        targetCtx.save();
+        targetCtx.globalCompositeOperation = 'source-over';
+        targetCtx.fillStyle = applyAlphaToColor(stroke.color, stroke.alpha);
+        targetCtx.beginPath();
+        targetCtx.arc(point.x, point.y, Math.max(0.8, getPressureAdjustedSize(stroke, point) * 0.5), 0, Math.PI * 2);
+        targetCtx.fill();
+        targetCtx.restore();
       }
 
       function renderStrokeContinuously(_ctx, strokeParams) {
         const pts = strokeParams.points || [];
         if (!pts.length) return;
+        const isFxStroke = usesFxLayer(strokeParams);
+        const activeCtx = isFxStroke ? fxCtx : drawCtx;
         if (pts.length < 2) {
-          renderBrushPoint(drawCtx, pts[0], strokeParams);
+          renderBrushPoint(activeCtx, pts[0], strokeParams);
           return;
         }
 
@@ -1220,7 +1230,12 @@
 
         switch (strokeParams.tool) {
           case 'brush':
-            drawStandardFluidLine(drawCtx, pts, strokeParams);
+            if (isFxStroke) {
+              clearCanvas(fxCtx, fxCanvas);
+              drawWholeFluidLine(fxCtx, pts, strokeParams);
+            } else {
+              drawStandardFluidLine(drawCtx, pts, strokeParams);
+            }
             break;
           case 'eraser':
             drawEraserLine(pts, strokeParams);
@@ -1233,7 +1248,7 @@
             drawSprayPattern(drawCtx, pts, strokeParams);
             break;
           default:
-            drawStandardFluidLine(drawCtx, pts, strokeParams);
+            drawStandardFluidLine(activeCtx, pts, strokeParams);
             break;
         }
       }
@@ -1248,6 +1263,18 @@
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         traceCurve(ctx, pts);
+        ctx.restore();
+      }
+
+      function drawWholeFluidLine(ctx, pts, params) {
+        if (!pts || pts.length < 2) return;
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = applyAlphaToColor(params.color, params.alpha);
+        ctx.lineWidth = getPressureAdjustedSize(params, pts[pts.length - 1]);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        traceWholeCurve(ctx, pts);
         ctx.restore();
       }
 
@@ -1329,7 +1356,8 @@
           points: [point]
         };
 
-        renderBrushPoint(drawCtx, point, state.activeStroke);
+        const activeCtx = usesFxLayer(state.activeStroke) ? fxCtx : drawCtx;
+        renderBrushPoint(activeCtx, point, state.activeStroke);
         send({
           type: 'drawStroke',
           stroke: {
@@ -1349,9 +1377,12 @@
       function extendStroke(point) {
         if (!state.pointerDown || !state.activeStroke) return;
         state.activeStroke.points.push(point);
-        renderStrokeContinuously(drawCtx, state.activeStroke);
 
-        if (state.activeStroke.tool !== 'neon' && state.activeStroke.points.length > 12) {
+        const isFxStroke = usesFxLayer(state.activeStroke);
+        const activeCtx = isFxStroke ? fxCtx : drawCtx;
+        renderStrokeContinuously(activeCtx, state.activeStroke);
+
+        if (!isFxStroke && state.activeStroke.points.length > 12) {
           state.activeStroke.points = state.activeStroke.points.slice(-6);
         }
 
@@ -1359,7 +1390,7 @@
           type: 'drawStroke',
           stroke: {
             ...state.activeStroke,
-            points: (state.activeStroke.tool === 'neon' ? state.activeStroke.points : getRenderableStrokePoints(state.activeStroke)).map(toNormPoint)
+            points: (isFxStroke ? state.activeStroke.points : getRenderableStrokePoints(state.activeStroke)).map(toNormPoint)
           }
         });
 
@@ -1376,8 +1407,8 @@
         const finishedStroke = state.activeStroke;
         state.pointerDown = false;
         state.activeStroke = null;
-        if (finishedStroke && usesFxLayer(finishedStroke.tool)) {
-          commitFxToDraw(true);
+        if (finishedStroke && usesFxLayer(finishedStroke)) {
+          commitFxToDraw(true, finishedStroke.tool);
         }
         send({ type: 'pointerPreview', show: false });
       }
@@ -1386,19 +1417,12 @@
         if (!stroke || !stroke.points || !stroke.points.length) return;
         const hydratedPoints = stroke.points.map(fromStrokePoint);
         const hydratedStroke = { ...stroke, points: hydratedPoints };
-        if (hydratedStroke.tool === 'neon') {
-          if (hydratedPoints.length === 1) {
-            renderBrushPoint(fxCtx, hydratedPoints[0], hydratedStroke);
-            return;
-          }
-          renderStrokeContinuously(fxCtx, hydratedStroke);
-          return;
-        }
+        const activeCtx = usesFxLayer(hydratedStroke) ? fxCtx : drawCtx;
         if (hydratedPoints.length === 1) {
-          renderBrushPoint(drawCtx, hydratedPoints[0], hydratedStroke);
+          renderBrushPoint(activeCtx, hydratedPoints[0], hydratedStroke);
           return;
         }
-        renderStrokeContinuously(drawCtx, hydratedStroke);
+        renderStrokeContinuously(activeCtx, hydratedStroke);
       }
 
       function setTool(tool) {
@@ -1557,8 +1581,8 @@
 
       async function exportArtwork() {
         try {
-          if (state.pointerDown && state.activeStroke && usesFxLayer(state.activeStroke.tool)) {
-            commitFxToDraw(true);
+          if (state.pointerDown && state.activeStroke && usesFxLayer(state.activeStroke)) {
+            commitFxToDraw(true, state.activeStroke.tool);
           }
 
           const composite = document.createElement('canvas');
@@ -1777,10 +1801,6 @@
             yNorm: p.y / drawCanvas.height,
             show: true
           });
-
-          if (state.pointerDown && state.activeStroke && state.activeStroke.tool === 'neon') {
-            fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
-          }
 
           if (state.pointerDown) extendStroke(p);
         }
