@@ -1493,7 +1493,7 @@
       async function autoLoadGuideImage() {
         if (state.baseImageData) return false;
 
-        const candidates = ['./assets/guia.png', './guia.png'];
+        const candidates = ['./assets/byd V3.png', './byd V3.png'];
         for (const src of candidates) {
           try {
             const dataUrl = await tryLoadImageAsDataUrl(src);
